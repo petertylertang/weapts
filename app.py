@@ -138,13 +138,29 @@ floor_filter = st.sidebar.multiselect(
     default=all_floors
 )
 
+# Price range filter
+price_min = int(df['price_numeric'].dropna().min()) if df['price_numeric'].notna().any() else 0
+price_max = int(df['price_numeric'].dropna().max()) if df['price_numeric'].notna().any() else 0
+price_range = st.sidebar.slider(
+    "Price Range",
+    min_value=price_min,
+    max_value=price_max,
+    value=(price_min, price_max),
+    step=50,
+)
+
 # Apply filters for historical analysis
 mask = (
-    (source_df['date'] >= date_range[0]) & 
+    (source_df['date'] >= date_range[0]) &
     (source_df['date'] <= date_range[1]) &
     (source_df['bedroom_label'].isin(bedroom_filter)) &
     (source_df['apartment_type'].isin(apartment_type_filter)) &
-    (source_df['floor'].isin(floor_filter))
+    (source_df['floor'].isin(floor_filter)) &
+    (
+        (~source_df['has_price']) |
+        ((source_df['price_numeric'] >= price_range[0]) &
+         (source_df['price_numeric'] <= price_range[1]))
+    )
 )
 filtered_df = source_df[mask].copy()
 
@@ -153,7 +169,12 @@ snapshot_date = date_range[1]
 snapshot_df = source_df[(source_df['date'] == snapshot_date) &
                  (source_df['bedroom_label'].isin(bedroom_filter)) &
                  (source_df['apartment_type'].isin(apartment_type_filter)) &
-                 (source_df['floor'].isin(floor_filter))].copy()
+                 (source_df['floor'].isin(floor_filter)) &
+                 (
+                     (~source_df['has_price']) |
+                     ((source_df['price_numeric'] >= price_range[0]) &
+                      (source_df['price_numeric'] <= price_range[1]))
+                 )].copy()
 
 # Main dashboard tabs
 tab0, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["☀️ Daily Briefing", "📊 Overview", "💰 Price Trends", "🏠 Unit Analysis", "⏱️ Market Duration", "🎯 Insights", "🤖 AI Recommendations"])
