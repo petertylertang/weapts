@@ -138,6 +138,13 @@ floor_filter = st.sidebar.multiselect(
     default=all_floors
 )
 
+# Workforce housing filter
+workforce_filter = st.sidebar.selectbox(
+    "Workforce Housing",
+    options=["Include All", "Only Workforce Housing", "Exclude Workforce Housing"],
+    index=0
+)
+
 # Price range filter
 price_min = int(df['price_numeric'].dropna().min()) if df['price_numeric'].notna().any() else 0
 price_max = int(df['price_numeric'].dropna().max()) if df['price_numeric'].notna().any() else 0
@@ -162,19 +169,34 @@ mask = (
          (source_df['price_numeric'] <= price_range[1]))
     )
 )
+
+if workforce_filter == "Only Workforce Housing":
+    mask &= source_df['is_workforce_housing']
+elif workforce_filter == "Exclude Workforce Housing":
+    mask &= ~source_df['is_workforce_housing']
 filtered_df = source_df[mask].copy()
 
 # Create a filtered snapshot for the overview tab based on the END of the date range
 snapshot_date = date_range[1]
-snapshot_df = source_df[(source_df['date'] == snapshot_date) &
-                 (source_df['bedroom_label'].isin(bedroom_filter)) &
-                 (source_df['apartment_type'].isin(apartment_type_filter)) &
-                 (source_df['floor'].isin(floor_filter)) &
-                 (
-                     (~source_df['has_price']) |
-                     ((source_df['price_numeric'] >= price_range[0]) &
-                      (source_df['price_numeric'] <= price_range[1]))
-                 )].copy()
+
+snapshot_mask = (
+    (source_df['date'] == snapshot_date) &
+    (source_df['bedroom_label'].isin(bedroom_filter)) &
+    (source_df['apartment_type'].isin(apartment_type_filter)) &
+    (source_df['floor'].isin(floor_filter)) &
+    (
+        (~source_df['has_price']) |
+        ((source_df['price_numeric'] >= price_range[0]) &
+         (source_df['price_numeric'] <= price_range[1]))
+    )
+)
+
+if workforce_filter == "Only Workforce Housing":
+    snapshot_mask &= source_df['is_workforce_housing']
+elif workforce_filter == "Exclude Workforce Housing":
+    snapshot_mask &= ~source_df['is_workforce_housing']
+
+snapshot_df = source_df[snapshot_mask].copy()
 
 # Main dashboard tabs
 tab0, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["☀️ Daily Briefing", "📊 Overview", "💰 Price Trends", "🏠 Unit Analysis", "⏱️ Market Duration", "🎯 Insights", "🤖 AI Recommendations"])
@@ -224,17 +246,26 @@ with tab0:
         previous_data = source_df[source_df['date'] == briefing_previous_date].copy()
 
         # Apply the sidebar filters to both dataframes
-        briefing_latest_df = latest_data[
+        latest_mask = (
             (latest_data['bedroom_label'].isin(bedroom_filter)) &
             (latest_data['apartment_type'].isin(apartment_type_filter)) &
             (latest_data['floor'].isin(floor_filter))
-        ].copy()
-
-        briefing_previous_df = previous_data[
+        )
+        previous_mask = (
             (previous_data['bedroom_label'].isin(bedroom_filter)) &
             (previous_data['apartment_type'].isin(apartment_type_filter)) &
             (previous_data['floor'].isin(floor_filter))
-        ].copy()
+        )
+
+        if workforce_filter == "Only Workforce Housing":
+            latest_mask &= latest_data['is_workforce_housing']
+            previous_mask &= previous_data['is_workforce_housing']
+        elif workforce_filter == "Exclude Workforce Housing":
+            latest_mask &= ~latest_data['is_workforce_housing']
+            previous_mask &= ~previous_data['is_workforce_housing']
+
+        briefing_latest_df = latest_data[latest_mask].copy()
+        briefing_previous_df = previous_data[previous_mask].copy()
 
         # Calculate changes
         latest_units_set = set(briefing_latest_df['apartment_id'].unique())
