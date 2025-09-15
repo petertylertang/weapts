@@ -59,7 +59,7 @@ st.markdown("""
 st.title("🏢 Residences at West Edge - Market Analytics Dashboard")
 st.markdown("---")
 
-@st.cache_data
+@st.cache_data(ttl=86400)
 def load_and_process_data():
     """Load and preprocess the apartment data"""
     # Construct the URL to download the CSV from Google Drive
