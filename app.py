@@ -94,6 +94,10 @@ def load_and_process_data():
     
     return df
 
+def convert_df_to_csv(df: pd.DataFrame) -> bytes:
+    """Convert a dataframe to CSV bytes for downloads."""
+    return df.to_csv(index=False).encode('utf-8')
+
 # Load data
 df = load_and_process_data()
 
@@ -197,6 +201,15 @@ elif workforce_filter == "Exclude Workforce Housing":
     snapshot_mask &= ~source_df['is_workforce_housing']
 
 snapshot_df = source_df[snapshot_mask].copy()
+
+# Track days on market for units available in the snapshot
+unit_days_on_market_map = {}
+if not snapshot_df.empty:
+    first_seen_dates = source_df.groupby('apartment_id')['date'].min()
+    for apt_id in snapshot_df['apartment_id'].unique():
+        first_seen_date = first_seen_dates.get(apt_id)
+        if pd.notnull(first_seen_date):
+            unit_days_on_market_map[apt_id] = (snapshot_date - first_seen_date).days + 1
 
 # Main dashboard tabs
 tab0, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["☀️ Daily Briefing", "📊 Overview", "💰 Price Trends", "🏠 Unit Analysis", "⏱️ Market Duration", "🎯 Insights", "🤖 AI Recommendations"])
@@ -355,13 +368,7 @@ with tab1:
             st.metric("Average Price", "N/A")
     with col3:
         # Calculate avg days on market for units in the snapshot
-        snapshot_market_days = []
-        for apt_id in snapshot_df['apartment_id'].unique():
-            # Use the full df to get the complete history of the unit
-            apt_history = source_df[source_df['apartment_id'] == apt_id]
-            # Days on market up to the snapshot date
-            days = (snapshot_date - apt_history['date'].min()).days + 1
-            snapshot_market_days.append(days)
+        snapshot_market_days = list(unit_days_on_market_map.values())
         avg_days = np.mean(snapshot_market_days) if snapshot_market_days else 0
         st.metric("Avg Days on Market", f"{avg_days:.0f}")
     with col4:
@@ -423,14 +430,58 @@ with tab1:
         if not snapshot_df.empty:
             floor_counts = snapshot_df.groupby('floor')['apartment_id'].nunique().reset_index(name='count')
             floor_counts = floor_counts.sort_values('floor')
-            
+
             fig = px.bar(floor_counts, x='floor', y='count',
                         title=f"Units by Floor ({snapshot_units} total)",
                         labels={'count': 'Number of Units', 'floor': 'Floor'})
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("No units available for this snapshot.")
-    
+
+    st.markdown("---")
+    st.subheader("👷 Workforce vs. Market Rate Snapshot")
+    if snapshot_units > 0:
+        segment_labels = {True: "Workforce Housing", False: "Market Rate"}
+        summary_rows = []
+
+        for segment_flag, label in segment_labels.items():
+            segment_df = snapshot_df[snapshot_df['is_workforce_housing'] == segment_flag]
+            if segment_df.empty:
+                continue
+
+            units = int(segment_df['apartment_id'].nunique())
+            share_of_inventory = (units / snapshot_units) * 100 if snapshot_units else 0
+
+            priced_df = segment_df[segment_df['has_price']]
+            units_with_price = int(priced_df['apartment_id'].nunique())
+            avg_price = priced_df['price_numeric'].mean()
+            avg_psf = priced_df['price_per_sqft'].mean()
+
+            segment_days = [unit_days_on_market_map.get(apt_id) for apt_id in segment_df['apartment_id'].unique()]
+            segment_days = [days for days in segment_days if days is not None]
+            avg_days_segment = np.mean(segment_days) if segment_days else np.nan
+
+            price_share = (units_with_price / units * 100) if units else 0
+
+            summary_rows.append({
+                "Segment": label,
+                "Units": units,
+                "Share of Inventory": f"{share_of_inventory:.1f}%",
+                "Units with Price": f"{units_with_price} ({price_share:.1f}%)" if units else str(units_with_price),
+                "Avg Price": f"${avg_price:,.0f}" if pd.notnull(avg_price) else "N/A",
+                "Avg $/SqFt": f"${avg_psf:,.2f}" if pd.notnull(avg_psf) else "N/A",
+                "Avg Days on Market": f"{avg_days_segment:.0f}" if pd.notnull(avg_days_segment) else "N/A",
+            })
+
+        if summary_rows:
+            summary_df = pd.DataFrame(summary_rows)
+            st.dataframe(summary_df, hide_index=True, use_container_width=True)
+            st.caption("Comparing workforce housing availability against standard market-rate inventory for the selected filters.")
+        else:
+            st.info("No workforce housing designations found in the current snapshot.")
+    else:
+        st.info("No units available for this snapshot.")
+
     # Show actual current units list
     st.markdown("---")
     st.subheader("📋 Unit List")
@@ -504,6 +555,35 @@ with tab1:
                 st.caption(f"Showing 10 of {len(display_df)} units. Check 'Show all units' to see complete list.")
         else:
             st.info("No units to display for the selected filters and date range.")
+
+    st.markdown("#### ⬇️ Download Filtered Data")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if not filtered_df.empty:
+            filtered_csv = convert_df_to_csv(filtered_df)
+            filtered_filename = f"west_edge_filtered_{date_range[0].strftime('%Y%m%d')}_{date_range[1].strftime('%Y%m%d')}.csv"
+            st.download_button(
+                label="Download filtered history (CSV)",
+                data=filtered_csv,
+                file_name=filtered_filename,
+                mime="text/csv",
+            )
+        else:
+            st.caption("No historical data available to download for the current filters.")
+
+    with col2:
+        if not snapshot_df.empty:
+            snapshot_csv = convert_df_to_csv(snapshot_df)
+            snapshot_filename = f"west_edge_snapshot_{snapshot_date.strftime('%Y%m%d')}.csv"
+            st.download_button(
+                label="Download snapshot data (CSV)",
+                data=snapshot_csv,
+                file_name=snapshot_filename,
+                mime="text/csv",
+            )
+        else:
+            st.caption("No snapshot data available to download.")
 
 # Tab 2: Price Trends
 with tab2:
@@ -614,7 +694,7 @@ with tab2:
                 'price_numeric': ['min', 'max', 'mean']
             }).reset_index()
             floor_prices.columns = ['Floor', 'Min', 'Max', 'Avg']
-            
+
             fig = go.Figure()
             fig.add_trace(go.Bar(x=floor_prices['Floor'], y=floor_prices['Max'] - floor_prices['Min'],
                                 base=floor_prices['Min'],
@@ -631,6 +711,44 @@ with tab2:
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("No price data available")
+
+    st.markdown("---")
+    st.subheader("📐 Price vs. Square Footage (Snapshot)")
+    if not snapshot_df.empty and snapshot_df['has_price'].any():
+        scatter_df = snapshot_df[snapshot_df['has_price']].copy()
+        scatter_df['sq_ft_numeric'] = pd.to_numeric(scatter_df['sq_ft'], errors='coerce')
+        scatter_df = scatter_df[scatter_df['sq_ft_numeric'].notna() & (scatter_df['sq_ft_numeric'] > 0)]
+        scatter_df = scatter_df[scatter_df['price_per_sqft'].notna()]
+
+        if not scatter_df.empty:
+            scatter_df['Square Feet'] = scatter_df['sq_ft_numeric']
+            scatter_df['Price ($)'] = scatter_df['price_numeric']
+            scatter_df['Price per SqFt'] = scatter_df['price_per_sqft']
+            scatter_df['Days on Market'] = scatter_df['apartment_id'].map(unit_days_on_market_map)
+
+            fig = px.scatter(
+                scatter_df,
+                x='Square Feet',
+                y='Price ($)',
+                color='bedroom_label',
+                hover_name='apartment_id',
+                hover_data={
+                    'Square Feet': ':.0f',
+                    'Price ($)': ':,.0f',
+                    'Price per SqFt': ':.2f',
+                    'Days on Market': ':.0f',
+                    'apartment_type': True,
+                },
+                labels={'bedroom_label': 'Bedroom Type'},
+                title=f"Price vs. Size for Active Units ({snapshot_date.strftime('%b %d, %Y')})",
+            )
+            fig.update_traces(marker=dict(size=12, opacity=0.8, line=dict(width=0.5, color='DarkSlateGrey')))
+            fig.update_layout(legend_title_text='Bedroom Type')
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Not enough priced units with square footage data to plot.")
+    else:
+        st.info("No price data available to visualize price versus size.")
 
 # Tab 3: Unit Analysis
 with tab3:
